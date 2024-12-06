@@ -86,6 +86,9 @@ class ConsensusProtocol:
         # Mining statistics
         self.mining_attempts = []
         self.start_time = time.time()
+
+        # Terminated Parameter
+        self.terminated = False
         print(f"Peer {self.peer_id} initialized with required confirmations: {self.required_confirmations}")
 
 
@@ -147,6 +150,10 @@ class ConsensusProtocol:
 
     def verify_transaction(self, tx: Transaction) -> bool:
         """Verify transaction integrity, chain linkage, and proof of work."""
+        # Verify if terminated
+        if self.terminated:
+            return False
+
         # Verify round and leader
         if tx.round_id < self.current_round:
             return False
@@ -173,29 +180,41 @@ class ConsensusProtocol:
         return True
 
     def add_confirmation(self, round_id: int, peer_id: int) -> bool:
-        """Add a confirmation from a peer and check if we have enough."""
+        if round_id != self.current_round:
+            return False
         self.confirmations[round_id].add(peer_id)
-        enough_confirmations = len(self.confirmations[round_id]) >= self.required_confirmations
-        print(f"Peer {self.peer_id} - Round {round_id} has {len(self.confirmations[round_id])} confirmations, needed: {self.required_confirmations}")
-        return enough_confirmations
+        return len(self.confirmations[round_id]) >= self.required_confirmations
+
 
     def commit_transaction(self, tx: Transaction):
-        """Commit a transaction to the chain."""
-        if tx.round_id < self.current_round:
+        if tx.round_id != self.current_round:
             return
 
         self.chain.append(tx)
         print(f"Peer {self.peer_id} - Committed transaction for round {tx.round_id}, chain length: {len(self.chain)}")
 
-        # Update current round
-        self.current_round = tx.round_id + 1
-        print("current round", self.current_round)
-
-        # Cleanup
+        # Clean up after commit
         if tx.round_id in self.pending_tx:
             del self.pending_tx[tx.round_id]
         if tx.round_id in self.confirmations:
-            del self.confirmations[tx.round_id]
+            self.confirmations[tx.round_id].clear()
+
+        # Update round number
+        self.current_round = tx.round_id + 1
+        print("current round", self.current_round)
+
+        # Check if we should terminate
+        if len(self.chain) >= self.total_peers:
+            self.terminated = True
+            print(f"Peer {self.peer_id} - Chain length reached total peers count. Terminating...")
+            stats = self.get_mining_stats()
+            print(f"Peer {self.peer_id} - Final chain length: {stats['total_blocks']}")
+            if stats['total_blocks'] > 0:
+                print(f"Peer {self.peer_id} - Mining statistics:")
+                print(f"Peer {self.peer_id} -   Average attempts per block: {stats['avg_attempts']:.2f}")
+                print(f"Peer {self.peer_id} -   Min attempts: {stats['min_attempts']}")
+                print(f"Peer {self.peer_id} -   Max attempts: {stats['max_attempts']}")
+                print(f"Peer {self.peer_id} -   Total time: {stats['total_time']:.2f}s")
 
     def get_mining_stats(self) -> dict:
         """Get mining statistics."""

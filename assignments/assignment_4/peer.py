@@ -142,10 +142,9 @@ class PeerNetwork:
                     del self.writers[peer_id]
 
     async def _run_consensus(self):
-        """Run the consensus protocol."""
         while True:
             try:
-                if not self.consensus_active:
+                if not self.consensus_active or self.consensus.terminated:
                     await asyncio.sleep(1)
                     continue
 
@@ -157,7 +156,6 @@ class PeerNetwork:
                         self.log(
                             f"Creating and broadcasting transaction for round {self.consensus.current_round}"
                         )
-                        # Store the transaction in pending_tx before broadcasting
                         self.consensus.pending_tx[self.consensus.current_round] = tx
                         msg = ConsensusMessage.create_add_tx(tx)
                         await self._broadcast_message(
