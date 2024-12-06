@@ -40,8 +40,37 @@ class Transaction:
         return hashlib.sha256(data.encode()).hexdigest()
 
 
+class ConsensusMessage:
+    """Class for creating consensus protocol messages."""
+
+    @staticmethod
+    def create_add_tx(tx: Transaction) -> dict:
+        """Create ADD_TX message."""
+        return {
+            'type': 'ADD_TX',
+            'transaction': tx.to_dict()
+        }
+
+    @staticmethod
+    def create_confirm_tx(round_id: int, peer_id: int) -> dict:
+        """Create CONFIRM_TX message."""
+        return {
+            'type': 'CONFIRM_TX',
+            'round_id': round_id,
+            'peer_id': peer_id
+        }
+
+    @staticmethod
+    def create_commit_tx(tx: Transaction) -> dict:
+        """Create COMMIT_TX message."""
+        return {
+            'type': 'COMMIT_TX',
+            'transaction': tx.to_dict()
+        }
+
+
 class ConsensusProtocol:
-    def __init__(self, peer_id: int, total_peers: int, target_zeros: int = 4):
+    def __init__(self, peer_id: int, total_peers: int, target_zeros: int = 5):
         self.peer_id = peer_id
         self.total_peers = total_peers
         self.current_round = 0
@@ -57,33 +86,19 @@ class ConsensusProtocol:
         # Mining statistics
         self.mining_attempts = []
         self.start_time = time.time()
+        print(f"Peer {self.peer_id} initialized with required confirmations: {self.required_confirmations}")
 
-        # Track committed rounds
-        self.committed_rounds = set()
+
+    def chain_length(self) -> int:
+        """Get the current length of the chain."""
+        return len(self.chain)
 
     def is_leader(self, round_id: int) -> bool:
-        """Determine if this peer is the leader for the given round."""
+        """Check if this peer is the leader for the given round."""
         return round_id % self.total_peers == self.peer_id
-
-    def _mine_block(self, tx: Transaction) -> tuple[int, str, int]:
-        """Mine a block to find nonce that gives hash with required zeros."""
-        nonce = 0
-        attempts = 0
-        while True:
-            attempts += 1
-            curr_hash = tx.calculate_hash(nonce)
-            if curr_hash.startswith(self.target_prefix):
-                return nonce, curr_hash, attempts
-            nonce += 1
-            # Optional: Add a maximum attempts limit
-            if attempts > 1000000:  # 1M attempts max
-                raise Exception("Mining failed: exceeded maximum attempts")
 
     def create_transaction(self, round_id: int) -> Optional[Transaction]:
         """Create a new transaction with mining."""
-        if round_id in self.committed_rounds:
-            return None
-
         if not self.is_leader(round_id):
             return None
 
@@ -106,29 +121,35 @@ class ConsensusProtocol:
             round_id=round_id
         )
 
-        try:
-            # Mine the block
-            nonce, curr_hash, attempts = self._mine_block(tx)
+        # Mine the block
+        nonce, curr_hash, attempts = self._mine_block(tx)
 
-            # Update mining statistics
-            self.mining_attempts.append(attempts)
+        # Update mining statistics
+        self.mining_attempts.append(attempts)
 
-            # Update transaction with mining results
-            tx.nonce = nonce
-            tx.curr_hash = curr_hash
-            tx.timestamp = time.time()
+        # Update transaction with mining results
+        tx.nonce = nonce
+        tx.curr_hash = curr_hash
 
-            return tx
-        except Exception as e:
-            print(f"Mining failed: {e}")
-            return None
+        return tx
+
+    def _mine_block(self, tx: Transaction) -> tuple[int, str, int]:
+        """Mine a block to find nonce that gives hash with required zeros."""
+        nonce = 0
+        attempts = 0
+
+        while True:
+            attempts += 1
+            curr_hash = tx.calculate_hash(nonce)
+            if curr_hash.startswith(self.target_prefix):
+                return nonce, curr_hash, attempts
+            nonce += 1
 
     def verify_transaction(self, tx: Transaction) -> bool:
-        """Verify transaction integrity and proof of work."""
-        if tx.round_id in self.committed_rounds:
-            return False
-
+        """Verify transaction integrity, chain linkage, and proof of work."""
         # Verify round and leader
+        if tx.round_id < self.current_round:
+            return False
         if tx.leader_id != (tx.round_id % self.total_peers):
             return False
 
@@ -138,7 +159,7 @@ class ConsensusProtocol:
                 return False
             if tx.sequence != len(self.chain):
                 return False
-        elif tx.prev_hash != '0' * 64 or tx.sequence != 0:
+        elif tx.prev_hash != '0' * 64 or tx.sequence != 0:  # Genesis block check
             return False
 
         # Verify proof of work
@@ -152,44 +173,39 @@ class ConsensusProtocol:
         return True
 
     def add_confirmation(self, round_id: int, peer_id: int) -> bool:
-        """Add confirmation and check if we have enough."""
-        if round_id in self.committed_rounds:
-            return False
-
+        """Add a confirmation from a peer and check if we have enough."""
         self.confirmations[round_id].add(peer_id)
-        return len(self.confirmations[round_id]) >= self.required_confirmations
+        enough_confirmations = len(self.confirmations[round_id]) >= self.required_confirmations
+        print(f"Peer {self.peer_id} - Round {round_id} has {len(self.confirmations[round_id])} confirmations, needed: {self.required_confirmations}")
+        return enough_confirmations
 
-    def commit_transaction(self, tx: Transaction) -> bool:
+    def commit_transaction(self, tx: Transaction):
         """Commit a transaction to the chain."""
-        if tx.round_id in self.committed_rounds:
-            return False
+        if tx.round_id < self.current_round:
+            return
 
-        # Verify the transaction can be added to our chain
-        if self.verify_transaction(tx):
-            self.chain.append(tx)
-            self.committed_rounds.add(tx.round_id)
+        self.chain.append(tx)
+        print(f"Peer {self.peer_id} - Committed transaction for round {tx.round_id}, chain length: {len(self.chain)}")
 
-            # Clean up pending state for this round
-            if tx.round_id in self.pending_tx:
-                del self.pending_tx[tx.round_id]
-            if tx.round_id in self.confirmations:
-                del self.confirmations[tx.round_id]
+        # Update current round
+        self.current_round = tx.round_id + 1
+        print("current round", self.current_round)
 
-            # Move to next round
-            self.current_round = max(self.current_round, tx.round_id + 1)
-            return True
-
-        return False
+        # Cleanup
+        if tx.round_id in self.pending_tx:
+            del self.pending_tx[tx.round_id]
+        if tx.round_id in self.confirmations:
+            del self.confirmations[tx.round_id]
 
     def get_mining_stats(self) -> dict:
         """Get mining statistics."""
         if not self.mining_attempts:
             return {
-                'total_blocks': len(self.chain),
+                'total_blocks': 0,
                 'avg_attempts': 0,
                 'min_attempts': 0,
                 'max_attempts': 0,
-                'total_time': time.time() - self.start_time
+                'total_time': 0
             }
 
         return {
@@ -198,28 +214,4 @@ class ConsensusProtocol:
             'min_attempts': min(self.mining_attempts),
             'max_attempts': max(self.mining_attempts),
             'total_time': time.time() - self.start_time
-        }
-
-
-class ConsensusMessage:
-    @staticmethod
-    def create_add_tx(tx: Transaction) -> dict:
-        return {
-            'type': 'ADD_TX',
-            'transaction': tx.to_dict()
-        }
-
-    @staticmethod
-    def create_confirm_tx(round_id: int, peer_id: int) -> dict:
-        return {
-            'type': 'CONFIRM_TX',
-            'round_id': round_id,
-            'peer_id': peer_id
-        }
-
-    @staticmethod
-    def create_commit_tx(tx: Transaction) -> dict:
-        return {
-            'type': 'COMMIT_TX',
-            'transaction': tx.to_dict()
         }
