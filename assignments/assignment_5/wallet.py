@@ -1,10 +1,10 @@
 import hashlib
-import base58
 import ecdsa
 import os
 import bech32
 import requests
 
+from persistence_tx import PersistentTransactionManager
 
 class BitcoinWallet:
     def __init__(self):
@@ -85,13 +85,37 @@ class BitcoinWallet:
         }
 
 
-# Example usage
 if __name__ == "__main__":
-    wallet = BitcoinWallet()
-    wallet.generate_wallet()
-    data = wallet.export_keys()
+    # Create a new wallet
+    # wallet = BitcoinWallet()
+    # wallet.generate_wallet()
+    # data = wallet.export_keys()
+    #
+    # print(f"Address (SegWit): {data['address']}")
+    # print(f"Private key: {data['private_key']}")
+    # print(f"Public key (compressed): {data['public_key']}")
+    # print(f"Balance: {data['balance']}")
 
-    print(f"Address (SegWit): {data['address']}")
-    print(f"Private key: {data['private_key']}")
-    print(f"Public key (compressed): {data['public_key']}")
-    print(f"Balance: {data['balance']}")
+    # Create a persistent transaction manager
+    manager = PersistentTransactionManager()
+
+    # Wallet 1
+    wallet1 = BitcoinWallet()
+    wallet1.generate_wallet()
+    manager.initialize_wallet(wallet1, 5)  # Initialize with 5 BTC
+
+    # Wallet 2
+    wallet2 = BitcoinWallet()
+    wallet2.generate_wallet()
+    manager.initialize_wallet(wallet2, 2)  # Initialize with 2 BTC
+
+    # Print wallet details
+    print(f"Wallet 1 Details: {manager.get_wallet_details(wallet1.address)}")
+    print(f"Wallet 2 Details: {manager.get_wallet_details(wallet2.address)}")
+
+    # Perform an internal transaction
+    result = manager.transfer(wallet1.address, wallet2.address, 1.5)
+    print(result)
+
+    print(f"Wallet 1 Balance: {manager.get_wallet_balance(wallet1.address)} BTC")
+    print(f"Wallet 2 Balance: {manager.get_wallet_balance(wallet2.address)} BTC")
